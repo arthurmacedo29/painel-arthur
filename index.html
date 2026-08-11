@@ -284,9 +284,6 @@
     </div>
     <div class="topbar-actions">
       <span class="user-badge" id="userBadge"></span>
-      <button class="btn btn-ghost btn-sm" id="exportBtn" title="Baixar backup em JSON">⭳ Exportar backup</button>
-      <button class="btn btn-ghost btn-sm" id="importBtn" title="Importar backup em JSON">⭱ Importar backup</button>
-      <input type="file" id="importFile" accept="application/json" class="visually-hidden">
       <button class="btn btn-icon btn-ghost" id="themeToggle" title="Alternar tema claro/escuro">◐</button>
       <button class="btn btn-ghost btn-sm" id="logoutBtn" title="Sair">Sair</button>
     </div>
@@ -817,44 +814,6 @@
     render();
     closeConfirmDelete();
     showToast("Tarefa excluída.");
-  });
-
-  // ---------- export / import ----------
-  document.getElementById("exportBtn").addEventListener("click", function(){
-    var blob = new Blob([JSON.stringify({tasks: tasks, exportedAt: new Date().toISOString()}, null, 2)], {type:"application/json"});
-    var url = URL.createObjectURL(blob);
-    var a = document.createElement("a");
-    a.href = url;
-    a.download = "painel-arthur-backup.json";
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    showToast("Backup exportado.");
-  });
-  document.getElementById("importBtn").addEventListener("click", function(){
-    document.getElementById("importFile").click();
-  });
-  document.getElementById("importFile").addEventListener("change", function(e){
-    var file = e.target.files[0];
-    if(!file) return;
-    var reader = new FileReader();
-    reader.onload = function(){
-      try{
-        var data = JSON.parse(reader.result);
-        var imported = Array.isArray(data) ? data : data.tasks;
-        if(!Array.isArray(imported)) throw new Error("formato inválido");
-        imported.forEach(function(t){ if(!t.id) t.id = uid(); });
-        tasks = imported;
-        saveTasks();
-        render();
-        showToast("Backup importado.");
-      }catch(err){
-        showToast("Não foi possível ler esse arquivo.");
-      }
-      e.target.value = "";
-    };
-    reader.readAsText(file);
   });
 
   // ---------- init ----------
