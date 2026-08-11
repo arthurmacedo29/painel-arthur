@@ -255,9 +255,28 @@
 
   .visually-hidden{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
 </style>
+  .user-badge{ font-size:12px; color: var(--text-secondary); display:flex; align-items:center; gap:6px; }
+  .user-badge img{ width:22px; height:22px; border-radius:50%; }
+  .sync-dot{ width:7px; height:7px; border-radius:50%; background: var(--good); display:inline-block; margin-right:4px; }
+  .sync-dot.offline{ background: var(--text-muted); }
+  .auth-card{ max-width: 380px; text-align:center; }
+  .auth-card p{ font-size:13px; color: var(--text-secondary); line-height:1.6; margin: 0 0 16px; }
+  .auth-card .btn{ width:100%; justify-content:center; }
+  .auth-error{ font-size:12px; color: var(--critical); margin-top:12px; }
+</style>
 </head>
 <body>
-<div class="app">
+<div class="overlay open" id="authOverlay">
+  <div class="modal auth-card">
+    <h2 id="authTitle">Entrar para acessar seu painel</h2>
+    <p id="authSubtitle">Entre com sua conta Google para ver e sincronizar suas tarefas em qualquer navegador.</p>
+    <button class="btn btn-primary" id="googleSignInBtn">Entrar com Google</button>
+    <button class="btn btn-ghost" id="signOutBtn" style="display:none; margin-top:8px;">Sair e tentar outra conta</button>
+    <div class="auth-error" id="authError" style="display:none;"></div>
+  </div>
+</div>
+
+<div class="app" id="appRoot" style="display:none;">
 
   <div class="topbar">
     <div>
@@ -265,10 +284,12 @@
       <div class="sub" id="todayLabel"></div>
     </div>
     <div class="topbar-actions">
+      <span class="user-badge" id="userBadge"></span>
       <button class="btn btn-ghost btn-sm" id="exportBtn" title="Baixar backup em JSON">⭳ Exportar backup</button>
       <button class="btn btn-ghost btn-sm" id="importBtn" title="Importar backup em JSON">⭱ Importar backup</button>
       <input type="file" id="importFile" accept="application/json" class="visually-hidden">
       <button class="btn btn-icon btn-ghost" id="themeToggle" title="Alternar tema claro/escuro">◐</button>
+      <button class="btn btn-ghost btn-sm" id="logoutBtn" title="Sair">Sair</button>
     </div>
   </div>
 
@@ -444,28 +465,105 @@
 
 <div class="toast" id="toast"></div>
 
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script>
 (function(){
   "use strict";
 
-  var STORAGE_KEY = "painelArthur.tasks.v1";
+  // ---------- Firebase ----------
+  var firebaseConfig = {
+    apiKey: "AIzaSyBsKzGqpVGSWhspGb4XZkdtyg0e4gWfVvA",
+    authDomain: "painel-arthur-a3988.firebaseapp.com",
+    projectId: "painel-arthur-a3988",
+    storageBucket: "painel-arthur-a3988.firebasestorage.app",
+    messagingSenderId: "342864414024",
+    appId: "1:342864414024:web:2444c3bcf624d8b09f1f7d"
+  };
+  var ALLOWED_EMAIL = "macedo.arthur29@gmail.com";
+  firebase.initializeApp(firebaseConfig);
+  var auth = firebase.auth();
+  var db = firebase.firestore();
+  var docRef = db.collection("paineis").doc("arthur");
+  var unsubscribeSnapshot = null;
+
   var THEME_KEY = "painelArthur.theme.v1";
   var tasks = [];
   var editingId = null;
   var deletingId = null;
   var draggedId = null;
+  var suppressNextRemoteEcho = false;
 
-  // ---------- storage ----------
-  function loadTasks(){
-    try{
-      var raw = localStorage.getItem(STORAGE_KEY);
-      if(raw){ tasks = JSON.parse(raw); return; }
-    }catch(e){}
-    tasks = seedTasks();
-    saveTasks();
+  // ---------- auth ----------
+  var authOverlay = document.getElementById("authOverlay");
+  var appRoot = document.getElementById("appRoot");
+
+  document.getElementById("googleSignInBtn").addEventListener("click", function(){
+    var provider = new firebase.auth.GoogleAuthProvider();
+    document.getElementById("authError").style.display = "none";
+    auth.signInWithPopup(provider).catch(function(err){
+      var el = document.getElementById("authError");
+      el.textContent = "Não foi possível entrar: " + (err && err.message ? err.message : err);
+      el.style.display = "block";
+    });
+  });
+  document.getElementById("signOutBtn").addEventListener("click", function(){ auth.signOut(); });
+  document.getElementById("logoutBtn").addEventListener("click", function(){ auth.signOut(); });
+
+  auth.onAuthStateChanged(function(user){
+    if(unsubscribeSnapshot){ unsubscribeSnapshot(); unsubscribeSnapshot = null; }
+
+    if(!user){
+      appRoot.style.display = "none";
+      authOverlay.classList.add("open");
+      document.getElementById("authTitle").textContent = "Entrar para acessar seu painel";
+      document.getElementById("authSubtitle").style.display = "block";
+      document.getElementById("googleSignInBtn").style.display = "inline-flex";
+      document.getElementById("signOutBtn").style.display = "none";
+      return;
+    }
+
+    if(user.email !== ALLOWED_EMAIL){
+      appRoot.style.display = "none";
+      authOverlay.classList.add("open");
+      document.getElementById("authTitle").textContent = "Esta conta não tem acesso a este painel";
+      document.getElementById("authSubtitle").style.display = "none";
+      document.getElementById("googleSignInBtn").style.display = "none";
+      document.getElementById("signOutBtn").style.display = "inline-flex";
+      return;
+    }
+
+    // Autenticado e autorizado
+    authOverlay.classList.remove("open");
+    appRoot.style.display = "";
+    var badge = document.getElementById("userBadge");
+    badge.innerHTML = (user.photoURL ? '<img src="' + user.photoURL + '" alt="">' : '') +
+      '<span>' + escapeHtml(user.displayName || user.email) + '</span>';
+
+    initTheme();
+    initDateLabel();
+    subscribeTasks();
+  });
+
+  function subscribeTasks(){
+    unsubscribeSnapshot = docRef.onSnapshot(function(snap){
+      if(snap.exists && snap.data().tasks){
+        tasks = snap.data().tasks;
+      } else {
+        tasks = seedTasks();
+        saveTasks();
+      }
+      render();
+    }, function(err){
+      showToast("Não foi possível sincronizar: " + err.message);
+    });
   }
+
+  // ---------- storage (Firestore) ----------
   function saveTasks(){
-    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks)); }catch(e){}
+    docRef.set({ tasks: tasks, updatedAt: firebase.firestore.FieldValue.serverTimestamp() }, { merge: true })
+      .catch(function(err){ showToast("Não foi possível salvar: " + err.message); });
   }
   function seedTasks(){
     var today = new Date();
@@ -761,10 +859,9 @@
   });
 
   // ---------- init ----------
+  // Tema é aplicado imediatamente (não depende de login); tarefas e data
+  // são carregadas dentro de onAuthStateChanged, após confirmar o login.
   initTheme();
-  initDateLabel();
-  loadTasks();
-  render();
 })();
 </script>
 </body>
