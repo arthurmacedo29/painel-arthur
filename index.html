@@ -245,6 +245,35 @@
   .steps li{ font-size: 12.5px; color: var(--text-secondary); margin-bottom: 6px; line-height:1.5; }
   .steps li:last-child{ margin-bottom:0; }
 
+  /* ---------- agenda: connectors & events ---------- */
+  .cal-connectors{ display:grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 18px; }
+  @media (max-width: 720px){ .cal-connectors{ grid-template-columns: 1fr; } }
+  .cal-connector-card{
+    background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; box-shadow: var(--shadow); display:flex; flex-direction:column; gap:8px;
+  }
+  .cal-connector-head{ display:flex; align-items:center; gap:8px; font-size:13.5px; }
+  .cal-dot{ width:9px; height:9px; border-radius:50%; display:inline-block; flex-shrink:0; }
+  .cal-connector-status{ font-size:12px; color: var(--text-muted); }
+  .cal-connector-status.connected{ color: var(--good); font-weight:600; }
+  .cal-connector-actions{ display:flex; gap:8px; }
+
+  .agenda-list{ display:flex; flex-direction:column; }
+  .agenda-day-group{ margin-bottom: 16px; }
+  .agenda-day-group .agenda-day-label{
+    font-size: 12px; font-weight:700; color: var(--text-secondary); text-transform:uppercase;
+    letter-spacing:.03em; margin-bottom:8px;
+  }
+  .agenda-event{
+    background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; box-shadow: var(--shadow); display:flex; gap:10px; align-items:flex-start;
+    margin-bottom:8px;
+  }
+  .agenda-event .cal-dot{ margin-top:5px; }
+  .agenda-event-body{ flex:1; }
+  .agenda-event-title{ font-size:13.5px; font-weight:600; }
+  .agenda-event-meta{ font-size:12px; color: var(--text-secondary); margin-top:2px; display:flex; gap:10px; flex-wrap:wrap; }
+
   .toast{
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
     background: var(--text-primary); color: var(--page); padding: 10px 18px; border-radius: 8px;
@@ -374,23 +403,37 @@
 
   <!-- ===================== AGENDA ===================== -->
   <div class="tab-panel" id="panel-agenda">
-    <div class="agenda-card">
-      <div class="big-icon">🗓️</div>
-      <h2>Agenda integrada — em breve</h2>
-      <p>
-        A conexão em tempo real com Google Agenda e Outlook fica para uma próxima etapa, como combinamos.
-        Ela precisa de um cadastro de aplicativo OAuth no Google Cloud Console e no Azure Portal, além de o
-        painel ficar publicado num endereço fixo (por exemplo, GitHub Pages) — logins do Google e da Microsoft
-        não funcionam de forma confiável quando a página é aberta como um arquivo local.
-      </p>
-      <ul class="steps">
-        <li>1. Publicar este painel em um endereço fixo (posso ajudar a colocar no GitHub Pages ou similar).</li>
-        <li>2. Criar um app OAuth gratuito no Google Cloud Console (para o Google Agenda).</li>
-        <li>3. Criar um registro de app no Azure Portal (para o Outlook / Microsoft 365).</li>
-        <li>4. Eu adiciono os botões de login e a lista de compromissos aqui nesta aba.</li>
-      </ul>
-      <p style="margin-bottom:0;">Quando quiser seguir com isso, é só me avisar por aqui.</p>
+
+    <div class="cal-connectors">
+      <div class="cal-connector-card">
+        <div class="cal-connector-head"><span class="cal-dot" style="background:var(--blue)"></span><strong>Google Agenda</strong></div>
+        <div class="cal-connector-status" id="googleCalStatus">Não conectado</div>
+        <div class="cal-connector-actions">
+          <button class="btn btn-primary btn-sm" id="googleCalConnectBtn">Conectar</button>
+          <button class="btn btn-ghost btn-sm" id="googleCalDisconnectBtn" style="display:none;">Desconectar</button>
+        </div>
+      </div>
+      <div class="cal-connector-card">
+        <div class="cal-connector-head"><span class="cal-dot" style="background:var(--aqua)"></span><strong>Outlook</strong></div>
+        <div class="cal-connector-status" id="outlookCalStatus">Em configuração</div>
+        <div class="cal-connector-actions">
+          <button class="btn btn-ghost btn-sm" disabled title="Ainda em configuração">Conectar</button>
+        </div>
+      </div>
     </div>
+
+    <div class="agenda-card" id="agendaEmptyState">
+      <div class="big-icon">🗓️</div>
+      <h2>Conecte sua Google Agenda</h2>
+      <p>
+        Clique em "Conectar" acima para autorizar o acesso de leitura à sua Google Agenda e ver aqui os
+        próximos compromissos dos próximos 14 dias, ao lado das suas tarefas. O Outlook (conta corporativa
+        Monumenta) ainda está em configuração.
+      </p>
+    </div>
+
+    <div class="agenda-list" id="agendaEventList" style="display:none;"></div>
+
   </div>
 
 </div>
@@ -464,6 +507,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <script>
 (function(){
   "use strict";
@@ -816,10 +860,150 @@
     showToast("Tarefa excluída.");
   });
 
+  // ---------- Google Calendar ----------
+  var GOOGLE_CALENDAR_CLIENT_ID = "342864414024-s0kno3sji821ub1is8iv45cb2l7sofpm.apps.googleusercontent.com";
+  var GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.readonly";
+  var googleCalTokenClient = null;
+  var googleCalAccessToken = null;
+  var googleCalEvents = [];
+  var outlookCalEvents = [];
+
+  function initGoogleCalendar(){
+    if(!window.google || !google.accounts || !google.accounts.oauth2){
+      setTimeout(initGoogleCalendar, 300);
+      return;
+    }
+    googleCalTokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: GOOGLE_CALENDAR_CLIENT_ID,
+      scope: GOOGLE_CALENDAR_SCOPE,
+      callback: handleGoogleCalToken
+    });
+  }
+
+  function handleGoogleCalToken(resp){
+    if(!resp || resp.error){
+      showToast("Não foi possível conectar a Google Agenda.");
+      return;
+    }
+    googleCalAccessToken = resp.access_token;
+    var statusEl = document.getElementById("googleCalStatus");
+    statusEl.textContent = "Conectado";
+    statusEl.classList.add("connected");
+    document.getElementById("googleCalConnectBtn").style.display = "none";
+    document.getElementById("googleCalDisconnectBtn").style.display = "";
+    fetchGoogleCalendarEvents();
+  }
+
+  function fetchGoogleCalendarEvents(){
+    var timeMin = new Date().toISOString();
+    var timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    var url = "https://www.googleapis.com/calendar/v3/events?calendarId=primary&timeMin="
+      + encodeURIComponent(timeMin) + "&timeMax=" + encodeURIComponent(timeMax)
+      + "&singleEvents=true&orderBy=startTime&maxResults=20";
+    fetch(url, { headers: { Authorization: "Bearer " + googleCalAccessToken } })
+      .then(function(r){
+        if(!r.ok){ throw new Error("HTTP " + r.status); }
+        return r.json();
+      })
+      .then(function(data){
+        googleCalEvents = (data.items || []).map(function(e){
+          return {
+            source: "google",
+            title: e.summary || "(sem título)",
+            start: (e.start && (e.start.dateTime || e.start.date)) || "",
+            allDay: !!(e.start && e.start.date && !e.start.dateTime),
+            location: e.location || ""
+          };
+        });
+        renderAgenda();
+      })
+      .catch(function(){
+        showToast("Sessão da Google Agenda expirou. Conecte novamente.");
+        disconnectGoogleCalendar();
+      });
+  }
+
+  function disconnectGoogleCalendar(){
+    if(googleCalAccessToken && window.google && google.accounts && google.accounts.oauth2){
+      google.accounts.oauth2.revoke(googleCalAccessToken, function(){});
+    }
+    googleCalAccessToken = null;
+    googleCalEvents = [];
+    var statusEl = document.getElementById("googleCalStatus");
+    statusEl.textContent = "Não conectado";
+    statusEl.classList.remove("connected");
+    document.getElementById("googleCalConnectBtn").style.display = "";
+    document.getElementById("googleCalDisconnectBtn").style.display = "none";
+    renderAgenda();
+  }
+
+  document.getElementById("googleCalConnectBtn").addEventListener("click", function(){
+    if(!googleCalTokenClient){ showToast("Aguarde, carregando conexão com o Google…"); return; }
+    googleCalTokenClient.requestAccessToken({ prompt: "consent" });
+  });
+  document.getElementById("googleCalDisconnectBtn").addEventListener("click", disconnectGoogleCalendar);
+
+  function fmtEventDay(iso, allDay){
+    var d = allDay ? new Date(iso + "T00:00:00") : new Date(iso);
+    var fmt = d.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+    return fmt.charAt(0).toUpperCase() + fmt.slice(1);
+  }
+  function fmtEventTime(iso, allDay){
+    if(allDay) return "Dia todo";
+    var d = new Date(iso);
+    return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function renderAgenda(){
+    var all = googleCalEvents.concat(outlookCalEvents).filter(function(e){ return e.start; });
+    all.sort(function(a, b){ return new Date(a.start) - new Date(b.start); });
+
+    var listEl = document.getElementById("agendaEventList");
+    var emptyEl = document.getElementById("agendaEmptyState");
+
+    if(!all.length){
+      listEl.style.display = "none";
+      listEl.innerHTML = "";
+      emptyEl.style.display = "";
+      return;
+    }
+    emptyEl.style.display = "none";
+    listEl.style.display = "";
+
+    var groups = [];
+    var lastDay = null;
+    all.forEach(function(e){
+      var dayKey = fmtEventDay(e.start, e.allDay);
+      if(dayKey !== lastDay){
+        groups.push({ label: dayKey, items: [] });
+        lastDay = dayKey;
+      }
+      groups[groups.length - 1].items.push(e);
+    });
+
+    listEl.innerHTML = groups.map(function(g){
+      var itemsHtml = g.items.map(function(e){
+        var dotColor = e.source === "google" ? "var(--blue)" : "var(--aqua)";
+        var sourceLabel = e.source === "google" ? "Google Agenda" : "Outlook";
+        return '<div class="agenda-event">'
+          + '<span class="cal-dot" style="background:' + dotColor + '"></span>'
+          + '<div class="agenda-event-body">'
+          + '<div class="agenda-event-title">' + escapeHtml(e.title) + '</div>'
+          + '<div class="agenda-event-meta">'
+          + '<span>' + escapeHtml(fmtEventTime(e.start, e.allDay)) + '</span>'
+          + '<span>' + escapeHtml(sourceLabel) + '</span>'
+          + (e.location ? '<span>' + escapeHtml(e.location) + '</span>' : '')
+          + '</div></div></div>';
+      }).join("");
+      return '<div class="agenda-day-group"><div class="agenda-day-label">' + escapeHtml(g.label) + '</div>' + itemsHtml + '</div>';
+    }).join("");
+  }
+
   // ---------- init ----------
   // Tema é aplicado imediatamente (não depende de login); tarefas e data
   // são carregadas dentro de onAuthStateChanged, após confirmar o login.
   initTheme();
+  initGoogleCalendar();
 })();
 </script>
 </body>
