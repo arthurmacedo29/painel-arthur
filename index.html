@@ -246,8 +246,8 @@
   .steps li:last-child{ margin-bottom:0; }
 
   /* ---------- agenda: connectors & events ---------- */
-  .cal-connectors{ display:grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-bottom: 18px; }
-  @media (max-width: 720px){ .cal-connectors{ grid-template-columns: 1fr; } }
+  .cal-connectors{ display:grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 18px; max-width: 80%; }
+  @media (max-width: 720px){ .cal-connectors{ grid-template-columns: 1fr; max-width: 100%; } }
   .cal-connector-card{
     background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px;
     padding: 14px 16px; box-shadow: var(--shadow); display:flex; flex-direction:column; gap:8px;
