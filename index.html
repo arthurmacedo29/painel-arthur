@@ -897,7 +897,7 @@
   function fetchGoogleCalendarEvents(){
     var timeMin = new Date().toISOString();
     var timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
-    var url = "https://www.googleapis.com/calendar/v3/events?calendarId=primary&timeMin="
+    var url = "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin="
       + encodeURIComponent(timeMin) + "&timeMax=" + encodeURIComponent(timeMax)
       + "&singleEvents=true&orderBy=startTime&maxResults=20";
     fetch(url, { headers: { Authorization: "Bearer " + googleCalAccessToken } })
