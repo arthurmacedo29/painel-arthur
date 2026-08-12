@@ -259,8 +259,8 @@
   .cal-connector-actions{ display:flex; gap:8px; }
 
   /* ---------- agenda: mini calendars ---------- */
-  .cal-months{ display:grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 20px; }
-  @media (max-width: 720px){ .cal-months{ grid-template-columns: 1fr; } }
+  .cal-months{ display:grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 20px; max-width: 80%; }
+  @media (max-width: 720px){ .cal-months{ grid-template-columns: 1fr; max-width: 100%; } }
   .cal-month{
     background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px;
     padding: 14px 14px 10px; box-shadow: var(--shadow);
