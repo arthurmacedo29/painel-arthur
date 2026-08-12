@@ -415,20 +415,20 @@
       </div>
       <div class="cal-connector-card">
         <div class="cal-connector-head"><span class="cal-dot" style="background:var(--aqua)"></span><strong>Outlook</strong></div>
-        <div class="cal-connector-status" id="outlookCalStatus">Em configuração</div>
+        <div class="cal-connector-status" id="outlookCalStatus">Não conectado</div>
         <div class="cal-connector-actions">
-          <button class="btn btn-ghost btn-sm" disabled title="Ainda em configuração">Conectar</button>
+          <button class="btn btn-primary btn-sm" id="outlookConnectBtn">Conectar</button>
+          <button class="btn btn-ghost btn-sm" id="outlookDisconnectBtn" style="display:none;">Desconectar</button>
         </div>
       </div>
     </div>
 
     <div class="agenda-card" id="agendaEmptyState">
       <div class="big-icon">🗓️</div>
-      <h2>Conecte sua Google Agenda</h2>
+      <h2>Conecte suas agendas</h2>
       <p>
-        Clique em "Conectar" acima para autorizar o acesso de leitura à sua Google Agenda e ver aqui os
-        próximos compromissos dos próximos 14 dias, ao lado das suas tarefas. O Outlook (conta corporativa
-        Monumenta) ainda está em configuração.
+        Clique em "Conectar" na Google Agenda e/ou no Outlook para ver aqui os próximos compromissos dos
+        próximos 14 dias, ao lado das suas tarefas.
       </p>
     </div>
 
@@ -508,6 +508,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3/lib/msal-browser.min.js"></script>
 <script>
 (function(){
   "use strict";
@@ -1019,11 +1020,126 @@
     }).join("");
   }
 
+  // ---------- Outlook (Microsoft Graph via MSAL) ----------
+  var MS_CLIENT_ID = "cd6be538-9ca2-47ae-ad46-364ce8eb6a49";
+  var MS_TENANT_ID = "aae1e412-019e-455e-a421-7510f7a4522f";
+  var MS_SCOPES = ["Calendars.Read"];
+  var msalInstance = null;
+  var msalReady = false;
+  var outlookAccount = null;
+
+  function initOutlookCalendar(){
+    if(!window.msal){
+      setTimeout(initOutlookCalendar, 300);
+      return;
+    }
+    msalInstance = new msal.PublicClientApplication({
+      auth: {
+        clientId: MS_CLIENT_ID,
+        authority: "https://login.microsoftonline.com/" + MS_TENANT_ID,
+        redirectUri: window.location.origin + window.location.pathname
+      },
+      cache: { cacheLocation: "sessionStorage" }
+    });
+    msalInstance.initialize().then(function(){
+      msalReady = true;
+      return msalInstance.handleRedirectPromise();
+    }).catch(function(err){
+      console.error("Erro ao iniciar MSAL:", err);
+    });
+  }
+
+  function connectOutlook(){
+    if(!msalReady || !msalInstance){
+      showToast("Aguarde, carregando conexão com a Microsoft…");
+      return;
+    }
+    msalInstance.loginPopup({ scopes: MS_SCOPES }).then(function(result){
+      outlookAccount = result.account;
+      var statusEl = document.getElementById("outlookCalStatus");
+      statusEl.textContent = "Conectado";
+      statusEl.classList.add("connected");
+      document.getElementById("outlookConnectBtn").style.display = "none";
+      document.getElementById("outlookDisconnectBtn").style.display = "";
+      fetchOutlookEvents();
+    }).catch(function(err){
+      console.error("Erro ao conectar Outlook:", err);
+      showToast("Não foi possível conectar o Outlook.");
+    });
+  }
+
+  function fetchOutlookEvents(){
+    msalInstance.acquireTokenSilent({ scopes: MS_SCOPES, account: outlookAccount })
+      .catch(function(){
+        return msalInstance.acquireTokenPopup({ scopes: MS_SCOPES, account: outlookAccount });
+      })
+      .then(function(tokenResp){
+        var startDT = new Date().toISOString();
+        var endDT = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+        var url = "https://graph.microsoft.com/v1.0/me/calendarview?startDateTime="
+          + encodeURIComponent(startDT) + "&endDateTime=" + encodeURIComponent(endDT)
+          + "&$orderby=start/dateTime&$top=20";
+        return fetch(url, {
+          headers: {
+            Authorization: "Bearer " + tokenResp.accessToken,
+            Prefer: 'outlook.timezone="UTC"'
+          }
+        });
+      })
+      .then(function(r){
+        if(!r.ok){
+          return r.text().then(function(t){
+            var e = new Error(t || ("HTTP " + r.status)); e.code = r.status; throw e;
+          });
+        }
+        return r.json();
+      })
+      .then(function(data){
+        outlookCalEvents = (data.value || []).map(function(e){
+          var startsAt = e.start && e.start.dateTime ? e.start.dateTime : "";
+          if(startsAt && startsAt.indexOf("Z") === -1 && startsAt.indexOf("+") === -1){
+            startsAt += "Z";
+          }
+          return {
+            source: "outlook",
+            title: e.subject || "(sem título)",
+            start: startsAt,
+            allDay: !!e.isAllDay,
+            location: (e.location && e.location.displayName) || ""
+          };
+        });
+        renderAgenda();
+      })
+      .catch(function(err){
+        console.error("Erro Outlook Calendar:", err);
+        var detail = (err && err.message) ? String(err.message).slice(0, 220) : "erro desconhecido";
+        var statusEl = document.getElementById("outlookCalStatus");
+        statusEl.textContent = "Erro: " + detail;
+        statusEl.classList.remove("connected");
+        showToast("Não foi possível carregar o Outlook. Veja o detalhe no card.");
+      });
+  }
+
+  function disconnectOutlook(){
+    outlookAccount = null;
+    outlookCalEvents = [];
+    var statusEl = document.getElementById("outlookCalStatus");
+    statusEl.textContent = "Não conectado";
+    statusEl.classList.remove("connected");
+    document.getElementById("outlookConnectBtn").style.display = "";
+    document.getElementById("outlookDisconnectBtn").style.display = "none";
+    renderAgenda();
+  }
+
+  document.getElementById("outlookConnectBtn").addEventListener("click", connectOutlook);
+  document.getElementById("outlookDisconnectBtn").addEventListener("click", disconnectOutlook);
+
   // ---------- init ----------
   // Tema é aplicado imediatamente (não depende de login); tarefas e data
   // são carregadas dentro de onAuthStateChanged, após confirmar o login.
   initTheme();
   initGoogleCalendar();
+  initOutlookCalendar();
 })();
 </script>
 </body>
