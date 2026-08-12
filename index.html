@@ -326,18 +326,6 @@
   <!-- ===================== TAREFAS ===================== -->
   <div class="tab-panel active" id="panel-tarefas">
 
-    <div class="banner" id="wrikeBanner">
-      <div class="icon">🔗</div>
-      <div class="content">
-        <strong>Wrike ainda não está conectado nesta sessão.</strong>
-        Você pode cadastrar tarefas manualmente agora mesmo. Para trazer suas tarefas reais do Wrike
-        automaticamente, conecte o Wrike em <em>claude.ai → Configurações → Conectores</em> e depois peça
-        para o Claude "sincronizar minhas tarefas do Wrike neste painel" — cada tarefa importada aparece aqui
-        marcada com a etiqueta <span class="pill source-wrike" style="padding:1px 6px;">Wrike</span>.
-      </div>
-      <button class="close" id="closeBanner" title="Fechar aviso">✕</button>
-    </div>
-
     <div class="stats">
       <div class="stat-tile">
         <div class="label"><span class="dot" style="background:var(--critical)"></span>Urgentes</div>
@@ -652,11 +640,6 @@
       tab.classList.add("active"); tab.setAttribute("aria-selected","true");
       document.getElementById("panel-" + tab.dataset.tab).classList.add("active");
     });
-  });
-
-  // ---------- banner ----------
-  document.getElementById("closeBanner").addEventListener("click", function(){
-    document.getElementById("wrikeBanner").style.display = "none";
   });
 
   // ---------- toast ----------
