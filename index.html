@@ -902,7 +902,14 @@
       + "&singleEvents=true&orderBy=startTime&maxResults=20";
     fetch(url, { headers: { Authorization: "Bearer " + googleCalAccessToken } })
       .then(function(r){
-        if(!r.ok){ throw new Error("HTTP " + r.status); }
+        if(r.status === 401){
+          var e = new Error("token_expired"); e.code = 401; throw e;
+        }
+        if(!r.ok){
+          return r.text().then(function(t){
+            var e = new Error(t || ("HTTP " + r.status)); e.code = r.status; throw e;
+          });
+        }
         return r.json();
       })
       .then(function(data){
@@ -917,10 +924,23 @@
         });
         renderAgenda();
       })
-      .catch(function(){
-        showToast("Sessão da Google Agenda expirou. Conecte novamente.");
-        disconnectGoogleCalendar();
+      .catch(function(err){
+        console.error("Erro Google Calendar:", err);
+        if(err && err.code === 401){
+          showToast("Sessão da Google Agenda expirou. Conecte novamente.");
+          disconnectGoogleCalendar();
+          return;
+        }
+        var detail = (err && err.message) ? String(err.message).slice(0, 220) : "erro desconhecido";
+        setGoogleCalError(detail);
       });
+  }
+
+  function setGoogleCalError(detail){
+    var statusEl = document.getElementById("googleCalStatus");
+    statusEl.textContent = "Erro: " + detail;
+    statusEl.classList.remove("connected");
+    showToast("Não foi possível carregar a Google Agenda. Veja o detalhe no card.");
   }
 
   function disconnectGoogleCalendar(){
