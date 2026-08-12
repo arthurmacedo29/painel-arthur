@@ -258,6 +258,38 @@
   .cal-connector-status.connected{ color: var(--good); font-weight:600; }
   .cal-connector-actions{ display:flex; gap:8px; }
 
+  /* ---------- agenda: mini calendars ---------- */
+  .cal-months{ display:grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-bottom: 20px; }
+  @media (max-width: 720px){ .cal-months{ grid-template-columns: 1fr; } }
+  .cal-month{
+    background: var(--surface-raised); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 14px 10px; box-shadow: var(--shadow);
+  }
+  .cal-month-title{ font-size: 13.5px; font-weight:700; margin-bottom: 10px; text-align:center; }
+  .cal-grid{ display:grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+  .cal-weekday{ font-size: 10.5px; font-weight:700; color: var(--text-muted); text-align:center; padding-bottom:4px; text-transform:uppercase; }
+  .cal-day{
+    position:relative; aspect-ratio: 1 / 1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:2px; border-radius: 7px; border:1px solid transparent; background:none; cursor:pointer; font-family:inherit;
+    color: var(--text-primary); padding:0;
+  }
+  .cal-day:hover{ background: var(--surface-1); }
+  .cal-day.other-month{ visibility:hidden; cursor:default; pointer-events:none; }
+  .cal-day-num{ font-size: 12px; }
+  .cal-day.today{ background: var(--blue); }
+  .cal-day.today .cal-day-num{ color:#fff; font-weight:700; }
+  .cal-day.selected{ outline: 2px solid var(--blue); outline-offset: -2px; }
+  .cal-day.today.selected{ outline-color: #fff; }
+  .cal-day-dots{ display:flex; gap:2px; height:5px; }
+  .cal-day-dot{ width:5px; height:5px; border-radius:50%; display:inline-block; }
+  .cal-day.today .cal-day-dot{ box-shadow: 0 0 0 1px #fff; }
+
+  .agenda-filter-bar{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    background: var(--surface-1); border: 1px solid var(--gridline); border-radius: 8px;
+    padding: 8px 12px; margin-bottom: 14px; font-size: 12.5px; font-weight:600;
+  }
+
   .agenda-list{ display:flex; flex-direction:column; }
   .agenda-day-group{ margin-bottom: 16px; }
   .agenda-day-group .agenda-day-label{
@@ -411,13 +443,20 @@
       </div>
     </div>
 
+    <div class="cal-months" id="calMonths"></div>
+
     <div class="agenda-card" id="agendaEmptyState">
       <div class="big-icon">🗓️</div>
       <h2>Conecte suas agendas</h2>
       <p>
-        Clique em "Conectar" na Google Agenda e/ou no Outlook para ver aqui os próximos compromissos dos
-        próximos 14 dias, ao lado das suas tarefas.
+        Clique em "Conectar" na Google Agenda e/ou no Outlook para ver aqui os compromissos do mês atual
+        e do mês seguinte, ao lado das suas tarefas. Os dias com compromissos aparecem marcados no calendário acima.
       </p>
+    </div>
+
+    <div class="agenda-filter-bar" id="agendaFilterBar" style="display:none;">
+      <span id="agendaFilterLabel"></span>
+      <button class="btn btn-ghost btn-sm" id="agendaClearFilterBtn">Ver todos</button>
     </div>
 
     <div class="agenda-list" id="agendaEventList" style="display:none;"></div>
@@ -850,6 +889,16 @@
   var googleCalAccessToken = null;
   var googleCalEvents = [];
   var outlookCalEvents = [];
+  var selectedAgendaDate = null;
+
+  function calRangeStart(){
+    var n = new Date();
+    return new Date(n.getFullYear(), n.getMonth(), 1);
+  }
+  function calRangeEnd(){
+    var n = new Date();
+    return new Date(n.getFullYear(), n.getMonth() + 2, 0, 23, 59, 59);
+  }
 
   function initGoogleCalendar(){
     if(!window.google || !google.accounts || !google.accounts.oauth2){
@@ -878,11 +927,11 @@
   }
 
   function fetchGoogleCalendarEvents(){
-    var timeMin = new Date().toISOString();
-    var timeMax = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+    var timeMin = calRangeStart().toISOString();
+    var timeMax = calRangeEnd().toISOString();
     var url = "https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin="
       + encodeURIComponent(timeMin) + "&timeMax=" + encodeURIComponent(timeMax)
-      + "&singleEvents=true&orderBy=startTime&maxResults=20";
+      + "&singleEvents=true&orderBy=startTime&maxResults=100";
     fetch(url, { headers: { Authorization: "Bearer " + googleCalAccessToken } })
       .then(function(r){
         if(r.status === 401){
@@ -957,25 +1006,126 @@
     return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
   }
 
+  // ---------- mini calendars (mês atual + mês seguinte) ----------
+  function pad2(n){ return n < 10 ? "0" + n : "" + n; }
+  function dateKeyLocal(d){ return d.getFullYear() + "-" + pad2(d.getMonth() + 1) + "-" + pad2(d.getDate()); }
+  function eventDateKey(e){
+    if(e.allDay) return e.start.slice(0, 10);
+    return dateKeyLocal(new Date(e.start));
+  }
+  function buildEventDayMap(){
+    var map = {};
+    googleCalEvents.concat(outlookCalEvents).forEach(function(e){
+      if(!e.start) return;
+      var key = eventDateKey(e);
+      if(!map[key]) map[key] = { google: false, outlook: false };
+      map[key][e.source] = true;
+    });
+    return map;
+  }
+  var CAL_WEEKDAY_LABELS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  function renderMonthBox(year, month, eventMap, todayKey){
+    var monthLabel = new Date(year, month, 1).toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
+    monthLabel = monthLabel.charAt(0).toUpperCase() + monthLabel.slice(1);
+    var startWeekday = new Date(year, month, 1).getDay();
+    var daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    var cellsHtml = "";
+    for(var i = 0; i < startWeekday; i++){
+      cellsHtml += '<div class="cal-day other-month"></div>';
+    }
+    for(var d = 1; d <= daysInMonth; d++){
+      var key = year + "-" + pad2(month + 1) + "-" + pad2(d);
+      var info = eventMap[key];
+      var dotsHtml = "";
+      if(info){
+        if(info.google) dotsHtml += '<span class="cal-day-dot" style="background:var(--blue)"></span>';
+        if(info.outlook) dotsHtml += '<span class="cal-day-dot" style="background:var(--aqua)"></span>';
+      }
+      var classes = "cal-day"
+        + (key === todayKey ? " today" : "")
+        + (key === selectedAgendaDate ? " selected" : "")
+        + (info ? " has-events" : "");
+      cellsHtml += '<button type="button" class="' + classes + '" data-date="' + key + '">'
+        + '<span class="cal-day-num">' + d + '</span>'
+        + '<span class="cal-day-dots">' + dotsHtml + '</span>'
+        + '</button>';
+    }
+    var totalCells = startWeekday + daysInMonth;
+    var remainder = totalCells % 7;
+    if(remainder !== 0){
+      for(var t = 0; t < 7 - remainder; t++){
+        cellsHtml += '<div class="cal-day other-month"></div>';
+      }
+    }
+    var weekdaysHtml = CAL_WEEKDAY_LABELS.map(function(w){ return '<div class="cal-weekday">' + w + '</div>'; }).join("");
+    return '<div class="cal-month"><div class="cal-month-title">' + escapeHtml(monthLabel) + '</div>'
+      + '<div class="cal-grid">' + weekdaysHtml + cellsHtml + '</div></div>';
+  }
+  function renderCalendar(){
+    var now = new Date();
+    var todayKey = dateKeyLocal(now);
+    var eventMap = buildEventDayMap();
+    var curHtml = renderMonthBox(now.getFullYear(), now.getMonth(), eventMap, todayKey);
+    var nextY = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
+    var nextM = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
+    var nextHtml = renderMonthBox(nextY, nextM, eventMap, todayKey);
+    document.getElementById("calMonths").innerHTML = curHtml + nextHtml;
+  }
+  document.getElementById("calMonths").addEventListener("click", function(ev){
+    var btn = ev.target.closest(".cal-day[data-date]");
+    if(!btn) return;
+    var key = btn.getAttribute("data-date");
+    selectedAgendaDate = (selectedAgendaDate === key) ? null : key;
+    renderCalendar();
+    renderAgenda();
+  });
+  document.getElementById("agendaClearFilterBtn").addEventListener("click", function(){
+    selectedAgendaDate = null;
+    renderCalendar();
+    renderAgenda();
+  });
+
   function renderAgenda(){
+    renderCalendar();
+
     var all = googleCalEvents.concat(outlookCalEvents).filter(function(e){ return e.start; });
     all.sort(function(a, b){ return new Date(a.start) - new Date(b.start); });
 
     var listEl = document.getElementById("agendaEventList");
     var emptyEl = document.getElementById("agendaEmptyState");
+    var filterBarEl = document.getElementById("agendaFilterBar");
 
     if(!all.length){
       listEl.style.display = "none";
       listEl.innerHTML = "";
+      filterBarEl.style.display = "none";
       emptyEl.style.display = "";
       return;
     }
     emptyEl.style.display = "none";
     listEl.style.display = "";
 
+    var filtered = all;
+    if(selectedAgendaDate){
+      filtered = all.filter(function(e){ return eventDateKey(e) === selectedAgendaDate; });
+      var labelDate = new Date(selectedAgendaDate + "T00:00:00");
+      var labelFmt = labelDate.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" });
+      labelFmt = labelFmt.charAt(0).toUpperCase() + labelFmt.slice(1);
+      document.getElementById("agendaFilterLabel").textContent = "Mostrando: " + labelFmt;
+      filterBarEl.style.display = "flex";
+    } else {
+      filterBarEl.style.display = "none";
+    }
+
+    if(!filtered.length){
+      listEl.innerHTML = '<div class="empty-hint">Nenhum compromisso neste dia.</div>';
+      return;
+    }
+
     var groups = [];
     var lastDay = null;
-    all.forEach(function(e){
+    filtered.forEach(function(e){
       var dayKey = fmtEventDay(e.start, e.allDay);
       if(dayKey !== lastDay){
         groups.push({ label: dayKey, items: [] });
@@ -1056,11 +1206,11 @@
         return msalInstance.acquireTokenPopup({ scopes: MS_SCOPES, account: outlookAccount });
       })
       .then(function(tokenResp){
-        var startDT = new Date().toISOString();
-        var endDT = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+        var startDT = calRangeStart().toISOString();
+        var endDT = calRangeEnd().toISOString();
         var url = "https://graph.microsoft.com/v1.0/me/calendarview?startDateTime="
           + encodeURIComponent(startDT) + "&endDateTime=" + encodeURIComponent(endDT)
-          + "&$orderby=start/dateTime&$top=20";
+          + "&$orderby=start/dateTime&$top=100";
         return fetch(url, {
           headers: {
             Authorization: "Bearer " + tokenResp.accessToken,
@@ -1120,6 +1270,7 @@
   // Tema é aplicado imediatamente (não depende de login); tarefas e data
   // são carregadas dentro de onAuthStateChanged, após confirmar o login.
   initTheme();
+  renderCalendar();
   initGoogleCalendar();
   initOutlookCalendar();
 })();
